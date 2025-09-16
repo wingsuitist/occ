@@ -59,6 +59,59 @@ generate_console_url() {
         return
     fi
     
+    # Handle 'exec' command - link to pod terminal
+    if [[ "$cmd" == "exec" ]]; then
+        local console_base=$(get_console_url)
+        if [[ -n "$console_base" ]]; then
+            local pod_name=""
+            local namespace=""
+            
+            # Parse exec command arguments to find pod name and namespace
+            local i=0
+            while [[ $i -lt ${#args[@]} ]]; do
+                case "${args[$i]}" in
+                    -n|--namespace)
+                        i=$((i + 1))
+                        if [[ $i -lt ${#args[@]} ]]; then
+                            namespace="${args[$i]}"
+                        fi
+                        ;;
+                    -c|--container|-i|--stdin|-t|--tty)
+                        # Skip these flags and their values (except -i and -t which are boolean)
+                        if [[ "${args[$i]}" == "-c" || "${args[$i]}" == "--container" ]]; then
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    --)
+                        # Stop parsing after -- (command separator)
+                        break
+                        ;;
+                    -*)
+                        # Skip other flags
+                        ;;
+                    *)
+                        # First non-flag argument should be the pod name
+                        if [[ -z "$pod_name" ]]; then
+                            pod_name="${args[$i]}"
+                        fi
+                        ;;
+                esac
+                i=$((i + 1))
+            done
+            
+            # If no namespace specified, get current namespace from context
+            if [[ -z "$namespace" ]]; then
+                namespace=$(get_current_namespace)
+            fi
+            
+            # Generate terminal URL if we have pod name and namespace
+            if [[ -n "$pod_name" && -n "$namespace" ]]; then
+                echo "🌐 ${console_base}/k8s/ns/$namespace/pods/$pod_name/terminal" >&2
+            fi
+        fi
+        return
+    fi
+    
     # Handle 'explain' command - link to Red Hat API documentation
     if [[ "$cmd" == "explain" ]]; then
         if [[ -n "${args[0]}" ]]; then
