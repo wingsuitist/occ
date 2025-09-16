@@ -112,6 +112,267 @@ generate_console_url() {
         return
     fi
     
+    # Handle 'run' command - link to pod creation form
+    if [[ "$cmd" == "run" ]]; then
+        local console_base=$(get_console_url)
+        if [[ -n "$console_base" ]]; then
+            local namespace=""
+            
+            # Parse run command arguments to find namespace
+            local i=0
+            while [[ $i -lt ${#args[@]} ]]; do
+                case "${args[$i]}" in
+                    -n|--namespace)
+                        i=$((i + 1))
+                        if [[ $i -lt ${#args[@]} ]]; then
+                            namespace="${args[$i]}"
+                        fi
+                        ;;
+                esac
+                i=$((i + 1))
+            done
+            
+            # If no namespace specified, get current namespace from context
+            if [[ -z "$namespace" ]]; then
+                namespace=$(get_current_namespace)
+            fi
+            
+            if [[ -n "$namespace" ]]; then
+                echo "🌐 ${console_base}/k8s/ns/$namespace/pods/~new" >&2
+            fi
+        fi
+        return
+    fi
+    
+    # Handle 'create' command - link to appropriate creation forms
+    if [[ "$cmd" == "create" ]]; then
+        local console_base=$(get_console_url)
+        if [[ -n "$console_base" ]]; then
+            local resource_type=""
+            local secret_type=""
+            local namespace=""
+            
+            # Parse create command arguments
+            local i=0
+            while [[ $i -lt ${#args[@]} ]]; do
+                case "${args[$i]}" in
+                    -n|--namespace)
+                        i=$((i + 1))
+                        if [[ $i -lt ${#args[@]} ]]; then
+                            namespace="${args[$i]}"
+                        fi
+                        ;;
+                    # Resources available through 'oc create' command
+                    build)
+                        resource_type="build"
+                        ;;
+                    clusterresourcequota)
+                        resource_type="clusterresourcequota"
+                        ;;
+                    clusterrole|clusterroles)
+                        resource_type="clusterrole"
+                        ;;
+                    clusterrolebinding|clusterrolebindings)
+                        resource_type="clusterrolebinding"
+                        ;;
+                    configmap|configmaps)
+                        resource_type="configmap"
+                        ;;
+                    cronjob|cronjobs)
+                        resource_type="cronjob"
+                        ;;
+                    deployment|deployments)
+                        resource_type="deployment"
+                        ;;
+                    deploymentconfig|deploymentconfigs)
+                        resource_type="deploymentconfig"
+                        ;;
+                    identity|identities)
+                        resource_type="identity"
+                        ;;
+                    imagestream|imagestreams)
+                        resource_type="imagestream"
+                        ;;
+                    imagestreamtag|imagestreamtags)
+                        resource_type="imagestreamtag"
+                        ;;
+                    ingress|ingresses)
+                        resource_type="ingress"
+                        ;;
+                    job|jobs)
+                        resource_type="job"
+                        ;;
+                    namespace|namespaces)
+                        resource_type="namespace"
+                        ;;
+                    poddisruptionbudget|poddisruptionbudgets|pdb)
+                        resource_type="poddisruptionbudget"
+                        ;;
+                    priorityclass|priorityclasses)
+                        resource_type="priorityclass"
+                        ;;
+                    quota|resourcequota|resourcequotas)
+                        resource_type="resourcequota"
+                        ;;
+                    role|roles)
+                        resource_type="role"
+                        ;;
+                    rolebinding|rolebindings)
+                        resource_type="rolebinding"
+                        ;;
+                    route|routes)
+                        resource_type="route"
+                        ;;
+                    secret|secrets)
+                        resource_type="secret"
+                        # Check for secret type
+                        if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+                            case "${args[$((i + 1))]}" in
+                                generic)
+                                    secret_type="generic"
+                                    ;;
+                                docker-registry)
+                                    secret_type="docker-registry"
+                                    ;;
+                                tls)
+                                    secret_type="tls"
+                                    ;;
+                            esac
+                        fi
+                        ;;
+                    service|services)
+                        resource_type="service"
+                        ;;
+                    serviceaccount|serviceaccounts)
+                        resource_type="serviceaccount"
+                        ;;
+                    token)
+                        resource_type="token"
+                        ;;
+                    user|users)
+                        resource_type="user"
+                        ;;
+                    useridentitymapping|useridentitymappings)
+                        resource_type="useridentitymapping"
+                        ;;
+                esac
+                i=$((i + 1))
+            done
+            
+            # If no namespace specified, get current namespace from context
+            if [[ -z "$namespace" ]]; then
+                namespace=$(get_current_namespace)
+            fi
+            
+            # Generate appropriate console URL based on resource type
+            if [[ -n "$resource_type" ]]; then
+                case "$resource_type" in
+                    # Cluster-scoped resources
+                    clusterresourcequota)
+                        echo "🌐 ${console_base}/k8s/cluster/quota.openshift.io~v1~ClusterResourceQuota/~new" >&2
+                        ;;
+                    clusterrole)
+                        echo "🌐 ${console_base}/k8s/cluster/rbac.authorization.k8s.io~v1~ClusterRole/~new" >&2
+                        ;;
+                    clusterrolebinding)
+                        echo "🌐 ${console_base}/k8s/cluster/rbac.authorization.k8s.io~v1~ClusterRoleBinding/~new" >&2
+                        ;;
+                    namespace)
+                        echo "🌐 ${console_base}/k8s/cluster/core~v1~Namespace/~new" >&2
+                        ;;
+                    priorityclass)
+                        echo "🌐 ${console_base}/k8s/cluster/scheduling.k8s.io~v1~PriorityClass/~new" >&2
+                        ;;
+                    user)
+                        echo "🌐 ${console_base}/k8s/cluster/user.openshift.io~v1~User/~new" >&2
+                        ;;
+                    identity)
+                        echo "🌐 ${console_base}/k8s/cluster/user.openshift.io~v1~Identity/~new" >&2
+                        ;;
+                    useridentitymapping)
+                        echo "🌐 ${console_base}/k8s/cluster/user.openshift.io~v1~UserIdentityMapping/~new" >&2
+                        ;;
+                    # Namespaced resources
+                    *)
+                        if [[ -n "$namespace" ]]; then
+                            case "$resource_type" in
+                                build)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/build.openshift.io~v1~Build/~new" >&2
+                                    ;;
+                                configmap)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/configmaps/~new" >&2
+                                    ;;
+                                cronjob)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/cronjobs/~new" >&2
+                                    ;;
+                                deployment)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/deployments/~new/form" >&2
+                                    ;;
+                                deploymentconfig)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/apps.openshift.io~v1~DeploymentConfig/~new" >&2
+                                    ;;
+                                imagestream)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/image.openshift.io~v1~ImageStream/~new" >&2
+                                    ;;
+                                imagestreamtag)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/image.openshift.io~v1~ImageStreamTag/~new" >&2
+                                    ;;
+                                ingress)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/ingresses/~new" >&2
+                                    ;;
+                                job)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/jobs/~new" >&2
+                                    ;;
+                                poddisruptionbudget)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/poddisruptionbudgets/~new" >&2
+                                    ;;
+                                resourcequota)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/resourcequotas/~new" >&2
+                                    ;;
+                                role)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/roles/~new" >&2
+                                    ;;
+                                rolebinding)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/rolebindings/~new" >&2
+                                    ;;
+                                route)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/route.openshift.io~v1~Route/~new" >&2
+                                    ;;
+                                secret)
+                                    case "$secret_type" in
+                                        generic)
+                                            echo "🌐 ${console_base}/k8s/ns/$namespace/secrets/~new/generic" >&2
+                                            ;;
+                                        docker-registry)
+                                            echo "🌐 ${console_base}/k8s/ns/$namespace/secrets/~new/image" >&2
+                                            ;;
+                                        tls)
+                                            echo "🌐 ${console_base}/k8s/ns/$namespace/secrets/~new/tls" >&2
+                                            ;;
+                                        *)
+                                            echo "🌐 ${console_base}/k8s/ns/$namespace/secrets/~new" >&2
+                                            ;;
+                                    esac
+                                    ;;
+                                service)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/services/~new" >&2
+                                    ;;
+                                serviceaccount)
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/serviceaccounts/~new" >&2
+                                    ;;
+                                token)
+                                    # Token creation doesn't have a specific form, link to service accounts
+                                    echo "🌐 ${console_base}/k8s/ns/$namespace/serviceaccounts" >&2
+                                    ;;
+                            esac
+                        fi
+                        ;;
+                esac
+            fi
+        fi
+        return
+    fi
+    
     # Handle 'explain' command - link to Red Hat API documentation
     if [[ "$cmd" == "explain" ]]; then
         if [[ -n "${args[0]}" ]]; then
