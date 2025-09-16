@@ -28,15 +28,32 @@ chmod +x /usr/local/bin/occ
 
 ## Enable Autocomplete
 
-To enable autocomplete for `occ`, add this line to your `.bashrc` or `.bash_profile`:
+First, ensure `oc` completion is set up for your shell:
+
+### Bash
+Add to your `.bashrc` or `.bash_profile`:
 
 ```bash
+source <(oc completion bash)
 complete -F __start_oc occ
 ```
 
 Then reload your shell configuration:
 ```bash
 source ~/.bashrc
+```
+
+### Zsh
+Add to your `.zshrc`:
+
+```bash
+source <(oc completion zsh)
+compdef _oc occ
+```
+
+Then reload your shell configuration:
+```bash
+source ~/.zshrc
 ```
 
 ## Usage
