@@ -16,6 +16,41 @@ get_console_url() {
     oc whoami --show-console 2>/dev/null
 }
 
+# Function to convert resource type to console format and check if it's cluster-scoped
+convert_resource_to_console_format() {
+    local resource_type="$1"
+    
+    # If resource type contains API group (e.g., metallbs.metallb.io), convert to console format
+    if [[ "$resource_type" == *"."* ]]; then
+        # Extract resource name and API group
+        local resource_name="${resource_type%%.*}"
+        local api_group="${resource_type#*.}"
+        
+        # Try to get the API version and kind from oc api-resources
+        local api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "^${resource_name}\s" | head -1)
+        
+        if [[ -n "$api_info" ]]; then
+            # Extract API group/version and kind from the output
+            # First collapse multiple spaces to single spaces, then extract columns
+            # Format after collapsing: NAME APIVERSION NAMESPACED KIND
+            local collapsed_info=$(echo "$api_info" | sed 's/  */ /g')
+            local api_group_version=$(echo "$collapsed_info" | awk '{print $2}')
+            local kind=$(echo "$collapsed_info" | awk '{print $4}')
+            
+            if [[ -n "$api_group_version" && -n "$kind" ]]; then
+                # Convert apigroup/version to apigroup~version~Kind
+                local converted_api=$(echo "$api_group_version" | sed 's|/|~|g')
+                echo "${converted_api}~${kind}"
+                return
+            fi
+        fi
+    fi
+    
+    # If conversion fails or not needed, return original
+    echo "$resource_type"
+}
+
+
 # Function to generate the best console URL for a command
 generate_console_url() {
     local cmd="$1"
@@ -1267,6 +1302,13 @@ generate_console_url() {
                 console_path="/k8s/cluster/storage.k8s.io~v1~StorageClass"
             fi
             ;;
+        ingressclasses|ingressclass)
+            if [[ -n "$resource_name" ]]; then
+                console_path="/k8s/cluster/networking.k8s.io~v1~IngressClass/$resource_name"
+            else
+                console_path="/k8s/cluster/networking.k8s.io~v1~IngressClass"
+            fi
+            ;;
         volumesnapshotclasses|volumesnapshotclass)
             if [[ -n "$resource_name" ]]; then
                 console_path="/k8s/cluster/snapshot.storage.k8s.io~v1~VolumeSnapshotClass/$resource_name"
@@ -1579,14 +1621,23 @@ generate_console_url() {
                         console_path="/k8s/ns/$namespace/events"
                         ;;
                     *)
-                        # Generic fallback for namespaced resources
+                        # For unknown namespaced resources, use all-namespaces fallback with converted type
+                        local converted_type=$(convert_resource_to_console_format "$resource_type")
                         if [[ -n "$resource_name" ]]; then
-                            console_path="/k8s/ns/$namespace/$resource_type/$resource_name"
+                            console_path="/api-resource/all-namespaces/$converted_type/instances/$resource_name"
                         else
-                            console_path="/k8s/ns/$namespace/$resource_type"
+                            console_path="/api-resource/all-namespaces/$converted_type/instances"
                         fi
                         ;;
                 esac
+            else
+                # For unknown resources without namespace, use all-namespaces fallback with converted type
+                local converted_type=$(convert_resource_to_console_format "$resource_type")
+                if [[ -n "$resource_name" ]]; then
+                    console_path="/api-resource/all-namespaces/$converted_type/instances/$resource_name"
+                else
+                    console_path="/api-resource/all-namespaces/$converted_type/instances"
+                fi
             fi
             ;;
     esac
