@@ -147,6 +147,62 @@ generate_console_url() {
         return
     fi
     
+    # Handle 'logs' command - link to pod logs
+    if [[ "$cmd" == "logs" ]]; then
+        local console_base=$(get_console_url)
+        if [[ -n "$console_base" ]]; then
+            local pod_name=""
+            local namespace=""
+            
+            # Parse logs command arguments to find pod name and namespace
+            local i=0
+            while [[ $i -lt ${#args[@]} ]]; do
+                case "${args[$i]}" in
+                    -n|--namespace)
+                        i=$((i + 1))
+                        if [[ $i -lt ${#args[@]} ]]; then
+                            namespace="${args[$i]}"
+                        fi
+                        ;;
+                    -c|--container|-f|--follow|--tail|--since|--since-time|--timestamps|--prefix)
+                        # Skip these flags and their values (except boolean flags)
+                        if [[ "${args[$i]}" == "-c" || "${args[$i]}" == "--container" || "${args[$i]}" == "--tail" || "${args[$i]}" == "--since" || "${args[$i]}" == "--since-time" ]]; then
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    -*)
+                        # Skip other flags
+                        ;;
+                    *)
+                        # Handle resource/name format (e.g., pod/nginx or deployment/myapp)
+                        if [[ "${args[$i]}" == *"/"* ]]; then
+                            local resource_type="${args[$i]%%/*}"
+                            pod_name="${args[$i]#*/}"
+                            # For non-pod resources, we'll still try to link to logs but it might not work perfectly
+                        else
+                            # First non-flag argument should be the pod name
+                            if [[ -z "$pod_name" ]]; then
+                                pod_name="${args[$i]}"
+                            fi
+                        fi
+                        ;;
+                esac
+                i=$((i + 1))
+            done
+            
+            # If no namespace specified, get current namespace from context
+            if [[ -z "$namespace" ]]; then
+                namespace=$(get_current_namespace)
+            fi
+            
+            # Generate logs URL if we have pod name and namespace
+            if [[ -n "$pod_name" && -n "$namespace" ]]; then
+                echo "🌐 ${console_base}/k8s/ns/$namespace/pods/$pod_name/logs" >&2
+            fi
+        fi
+        return
+    fi
+    
     # Handle 'run' command - link to pod creation form
     if [[ "$cmd" == "run" ]]; then
         local console_base=$(get_console_url)
