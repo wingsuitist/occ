@@ -6,7 +6,10 @@
 
 - Acts as a transparent wrapper around `oc` - all commands work exactly the same
 - Shows relevant OpenShift console URLs for your commands
-- Provides direct links to documentation for `oc explain` commands
+- **Enhanced resource detection** - Automatically detects resource types, API groups, and versions using `oc api-resources`
+- **Namespace-aware URLs** - Generates appropriate console URLs for both namespaced and cluster-scoped resources
+- **Comprehensive resource support** - Built-in support for core Kubernetes resources plus dynamic detection for custom resources
+- **Improved explain command** - Links directly to OpenShift console API resource schema for interactive documentation
 - Supports autocomplete just like the original `oc` command
 - Zero configuration required - works with your existing OpenShift setup
 
@@ -88,7 +91,7 @@ my-app-7d4b8c8f9-xyz12   1/1     Running   0          5m
 
 ```bash
 $ occ explain pod.spec
-🌐 https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single/workloads_apis/index#pod-v1-1
+🌐 https://console-openshift-console.apps.cluster.example.com/api-resource/ns/my-namespace/core~v1~Pod/schema
 # ... explanation output
 ```
 
@@ -109,3 +112,19 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+## @TODO: Rewrite in Go 🤪
+
+```
+         ,_---~~~~~----._         
+  _,,_,*^____      _____``*g*\"*, 
+ / __/ /'     ^.  /      \ ^@q   f 
+[  @f | @))    |  | @))   l  0 _/  
+ \`/   \~____ / __ \_____/    \   
+  |           _l__l_           I   
+  }          [______]           I  
+  ]            | | |            |  
+  ]             ~ ~             |  
+  |                            |   
+   |                           |   
+@ProggerX
+```

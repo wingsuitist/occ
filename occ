@@ -20,34 +20,184 @@ get_console_url() {
 convert_resource_to_console_format() {
     local resource_type="$1"
     
-    # If resource type contains API group (e.g., metallbs.metallb.io), convert to console format
+    # Handle core Kubernetes resources first (most common cases)
+    case "$resource_type" in
+        pod|pods|po)
+            echo "core~v1~Pod"
+            return
+            ;;
+        service|services|svc)
+            echo "core~v1~Service"
+            return
+            ;;
+        configmap|configmaps|cm)
+            echo "core~v1~ConfigMap"
+            return
+            ;;
+        secret|secrets)
+            echo "core~v1~Secret"
+            return
+            ;;
+        namespace|namespaces|ns)
+            echo "core~v1~Namespace"
+            return
+            ;;
+        node|nodes|no)
+            echo "core~v1~Node"
+            return
+            ;;
+        persistentvolume|persistentvolumes|pv)
+            echo "core~v1~PersistentVolume"
+            return
+            ;;
+        persistentvolumeclaim|persistentvolumeclaims|pvc)
+            echo "core~v1~PersistentVolumeClaim"
+            return
+            ;;
+        serviceaccount|serviceaccounts|sa)
+            echo "core~v1~ServiceAccount"
+            return
+            ;;
+        deployment|deployments|deploy)
+            echo "apps~v1~Deployment"
+            return
+            ;;
+        replicaset|replicasets|rs)
+            echo "apps~v1~ReplicaSet"
+            return
+            ;;
+        daemonset|daemonsets|ds)
+            echo "apps~v1~DaemonSet"
+            return
+            ;;
+        statefulset|statefulsets|sts)
+            echo "apps~v1~StatefulSet"
+            return
+            ;;
+        job|jobs)
+            echo "batch~v1~Job"
+            return
+            ;;
+        cronjob|cronjobs|cj)
+            echo "batch~v1~CronJob"
+            return
+            ;;
+        storageclass|storageclasses|sc)
+            echo "storage.k8s.io~v1~StorageClass"
+            return
+            ;;
+        ingress|ingresses|ing)
+            echo "networking.k8s.io~v1~Ingress"
+            return
+            ;;
+        networkpolicy|networkpolicies|netpol)
+            echo "networking.k8s.io~v1~NetworkPolicy"
+            return
+            ;;
+        role|roles)
+            echo "rbac.authorization.k8s.io~v1~Role"
+            return
+            ;;
+        rolebinding|rolebindings)
+            echo "rbac.authorization.k8s.io~v1~RoleBinding"
+            return
+            ;;
+        clusterrole|clusterroles)
+            echo "rbac.authorization.k8s.io~v1~ClusterRole"
+            return
+            ;;
+        clusterrolebinding|clusterrolebindings)
+            echo "rbac.authorization.k8s.io~v1~ClusterRoleBinding"
+            return
+            ;;
+        customresourcedefinition|customresourcedefinitions|crd|crds)
+            echo "apiextensions.k8s.io~v1~CustomResourceDefinition"
+            return
+            ;;
+    esac
+    
+    # For unknown resources, query oc api-resources to get the proper API group/version/kind
+    local resource_name="$resource_type"
+    
+    # If resource type contains API group (e.g., operatorconditions.operators.coreos.com), extract the base name
     if [[ "$resource_type" == *"."* ]]; then
-        # Extract resource name and API group
-        local resource_name="${resource_type%%.*}"
-        local api_group="${resource_type#*.}"
+        resource_name="${resource_type%%.*}"
+    fi
+    
+    # Try to get the API version and kind from oc api-resources
+    # First try exact match with the resource name
+    local api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "^${resource_name}\s" | head -1)
+    
+    # If no exact match, try to find by shortname or alternative name
+    if [[ -z "$api_info" ]]; then
+        api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "\s${resource_name}\s" | head -1)
+    fi
+    
+    # If still no match, try plural form (add 's')
+    if [[ -z "$api_info" ]]; then
+        api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "^${resource_name}s\s" | head -1)
+    fi
+    
+    if [[ -n "$api_info" ]]; then
+        # Extract API group/version and kind from the output
+        # First collapse multiple spaces to single spaces, then extract columns
+        # Format after collapsing: NAME SHORTNAMES APIVERSION NAMESPACED KIND
+        local collapsed_info=$(echo "$api_info" | sed 's/  */ /g')
+        local api_group_version=$(echo "$collapsed_info" | awk '{print $3}')
+        local kind=$(echo "$collapsed_info" | awk '{print $5}')
         
-        # Try to get the API version and kind from oc api-resources
-        local api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "^${resource_name}\s" | head -1)
+        if [[ -n "$api_group_version" && -n "$kind" ]]; then
+            # Convert apigroup/version to apigroup~version~Kind
+            local converted_api=$(echo "$api_group_version" | sed 's|/|~|g')
+            echo "${converted_api}~${kind}"
+            return
+        fi
+    fi
+    
+    # If conversion fails, return original
+    echo "$resource_type"
+}
+
+# Function to check if a resource is namespaced
+is_resource_namespaced() {
+    local resource_type="$1"
+    
+    # Use oc explain to get the KIND, then look up the NAMESPACED field in oc api-resources
+    local explain_output=$(oc explain "$resource_type" 2>/dev/null | head -10)
+    local kind=$(echo "$explain_output" | grep "^KIND:" | awk '{print $2}')
+    
+    if [[ -n "$kind" ]]; then
+        # Look up the resource by KIND in oc api-resources
+        local api_info=$(oc api-resources --no-headers 2>/dev/null | grep -E "\s${kind}$" | head -1)
         
         if [[ -n "$api_info" ]]; then
-            # Extract API group/version and kind from the output
-            # First collapse multiple spaces to single spaces, then extract columns
-            # Format after collapsing: NAME APIVERSION NAMESPACED KIND
+            # Extract the NAMESPACED field from the output
+            # The column structure varies: NAME [SHORTNAMES] APIVERSION NAMESPACED KIND
+            # We need to find the column that contains "true" or "false"
             local collapsed_info=$(echo "$api_info" | sed 's/  */ /g')
-            local api_group_version=$(echo "$collapsed_info" | awk '{print $2}')
-            local kind=$(echo "$collapsed_info" | awk '{print $4}')
             
-            if [[ -n "$api_group_version" && -n "$kind" ]]; then
-                # Convert apigroup/version to apigroup~version~Kind
-                local converted_api=$(echo "$api_group_version" | sed 's|/|~|g')
-                echo "${converted_api}~${kind}"
-                return
+            # Check each column to find the one with "true" or "false"
+            local num_fields=$(echo "$collapsed_info" | awk '{print NF}')
+            local namespaced=""
+            
+            for ((i=1; i<=num_fields; i++)); do
+                local field=$(echo "$collapsed_info" | awk -v col=$i '{print $col}')
+                if [[ "$field" == "true" || "$field" == "false" ]]; then
+                    namespaced="$field"
+                    break
+                fi
+            done
+            
+            if [[ "$namespaced" == "true" ]]; then
+                return 0  # true - resource is namespaced
+            elif [[ "$namespaced" == "false" ]]; then
+                return 1  # false - resource is cluster-scoped
             fi
         fi
     fi
     
-    # If conversion fails or not needed, return original
-    echo "$resource_type"
+    # If we can't determine, assume namespaced (safer default)
+    return 0
 }
 
 
@@ -464,781 +614,50 @@ generate_console_url() {
         return
     fi
     
-    # Handle 'explain' command - link to Red Hat API documentation
+    # Handle 'explain' command - link to OpenShift console API resource schema
     if [[ "$cmd" == "explain" ]]; then
         if [[ -n "${args[0]}" ]]; then
             local resource_field="${args[0]}"
             # Extract base resource type (e.g., deployment from deployment.spec.replicas)
             local base_resource="${resource_field%%.*}"
-            local docs_base="https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html-single"
+            local console_base=$(get_console_url)
             
-            # Map resources to their Red Hat documentation URLs
-            case "$base_resource" in
-                # Workload APIs
-                deployment|deployments)
-                    echo "🌐 ${docs_base}/workloads_apis/index#deployment-apps-v1" >&2
-                    ;;
-                pod|pods)
-                    echo "🌐 ${docs_base}/workloads_apis/index#pod-v1-1" >&2
-                    ;;
-                replicaset|replicasets)
-                    echo "🌐 ${docs_base}/workloads_apis/index#replicaset-apps-v1" >&2
-                    ;;
-                statefulset|statefulsets)
-                    echo "🌐 ${docs_base}/workloads_apis/index#statefulset-apps-v1" >&2
-                    ;;
-                daemonset|daemonsets)
-                    echo "🌐 ${docs_base}/workloads_apis/index#daemonset-apps-v1" >&2
-                    ;;
-                job|jobs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#job-batch-v1" >&2
-                    ;;
-                cronjob|cronjobs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#cronjob-batch-v1" >&2
-                    ;;
-                build|builds)
-                    echo "🌐 ${docs_base}/workloads_apis/index#build-build-openshift-io-v1" >&2
-                    ;;
-                buildconfig|buildconfigs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#buildconfig-build-openshift-io-v1" >&2
-                    ;;
-                buildlog|buildlogs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#buildlog-build-openshift-io-v1" >&2
-                    ;;
-                buildrequest|buildrequests)
-                    echo "🌐 ${docs_base}/workloads_apis/index#buildrequest-build-openshift-io-v1" >&2
-                    ;;
-                deploymentconfig|deploymentconfigs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#deploymentconfig-apps-openshift-io-v1" >&2
-                    ;;
-                deploymentconfigrollback|deploymentconfigrollbacks)
-                    echo "🌐 ${docs_base}/workloads_apis/index#deploymentconfigrollback-apps-openshift-io-v1" >&2
-                    ;;
-                deploymentlog|deploymentlogs)
-                    echo "🌐 ${docs_base}/workloads_apis/index#deploymentlog-apps-openshift-io-v1" >&2
-                    ;;
-                deploymentrequest|deploymentrequests)
-                    echo "🌐 ${docs_base}/workloads_apis/index#deploymentrequest-apps-openshift-io-v1" >&2
-                    ;;
-                replicationcontroller|replicationcontrollers)
-                    echo "🌐 ${docs_base}/workloads_apis/index#replicationcontroller-v1" >&2
-                    ;;
-                controllerrevision|controllerrevisions)
-                    echo "🌐 ${docs_base}/metadata_apis/index#controllerrevision-apps-v1" >&2
-                    ;;
-                podtemplate|podtemplates)
-                    echo "🌐 ${docs_base}/template_apis/index#podtemplate-v1" >&2
-                    ;;
+            if [[ -n "$console_base" ]]; then
+                # Get the API group, version, and kind directly from oc explain
+                local explain_output=$(oc explain "$base_resource" 2>/dev/null | head -10)
+                local group=$(echo "$explain_output" | grep "^GROUP:" | awk '{print $2}')
+                local kind=$(echo "$explain_output" | grep "^KIND:" | awk '{print $2}')
+                local version=$(echo "$explain_output" | grep "^VERSION:" | awk '{print $2}')
                 
-                # Network APIs
-                service|services)
-                    echo "🌐 ${docs_base}/network_apis/index#service-v1" >&2
-                    ;;
-                ingress|ingresses)
-                    echo "🌐 ${docs_base}/network_apis/index#ingress-networking-k8s-io-v1" >&2
-                    ;;
-                ingressclass|ingressclasses)
-                    echo "🌐 ${docs_base}/network_apis/index#ingressclass-networking-k8s-io-v1" >&2
-                    ;;
-                route|routes)
-                    echo "🌐 ${docs_base}/network_apis/index#route-route-openshift-io-v1" >&2
-                    ;;
-                endpoints|endpoint)
-                    echo "🌐 ${docs_base}/network_apis/index#endpoints-v1" >&2
-                    ;;
-                endpointslice|endpointslices)
-                    echo "🌐 ${docs_base}/network_apis/index#endpointslice-discovery-k8s-io-v1" >&2
-                    ;;
-                networkpolicy|networkpolicies)
-                    echo "🌐 ${docs_base}/network_apis/index#networkpolicy-networking-k8s-io-v1" >&2
-                    ;;
-                networkattachmentdefinition|networkattachmentdefinitions)
-                    echo "🌐 ${docs_base}/network_apis/index#networkattachmentdefinition-k8s-cni-cncf-io-v1" >&2
-                    ;;
-                multinetworkpolicy|multinetworkpolicies)
-                    echo "🌐 ${docs_base}/network_apis/index#multinetworkpolicy-k8s-cni-cncf-io-v1beta1" >&2
-                    ;;
-                adminnetworkpolicy|adminnetworkpolicies)
-                    echo "🌐 ${docs_base}/network_apis/index#adminnetworkpolicy-policy-networking-k8s-io-v1alpha1" >&2
-                    ;;
-                baselineadminnetworkpolicy|baselineadminnetworkpolicies)
-                    echo "🌐 ${docs_base}/network_apis/index#baselineadminnetworkpolicy-policy-networking-k8s-io-v1alpha1" >&2
-                    ;;
-                egressfirewall|egressfirewalls)
-                    echo "🌐 ${docs_base}/network_apis/index#egressfirewall-k8s-ovn-org-v1" >&2
-                    ;;
-                egressip|egressips)
-                    echo "🌐 ${docs_base}/network_apis/index#egressip-k8s-ovn-org-v1" >&2
-                    ;;
-                egressqos)
-                    echo "🌐 ${docs_base}/network_apis/index#egressqos-k8s-ovn-org-v1" >&2
-                    ;;
-                egressrouter|egressrouters)
-                    echo "🌐 ${docs_base}/network_apis/index#egressrouter-network-operator-openshift-io-v1" >&2
-                    ;;
-                egressservice|egressservices)
-                    echo "🌐 ${docs_base}/network_apis/index#egressservice-k8s-ovn-org-v1" >&2
-                    ;;
-                gateway|gateways)
-                    echo "🌐 ${docs_base}/network_apis/index#gateway-gateway-networking-k8s-io-v1" >&2
-                    ;;
-                gatewayclass|gatewayclasses)
-                    echo "🌐 ${docs_base}/network_apis/index#gatewayclass-gateway-networking-k8s-io-v1" >&2
-                    ;;
-                httproute|httproutes)
-                    echo "🌐 ${docs_base}/network_apis/index#httproute-gateway-networking-k8s-io-v1" >&2
-                    ;;
-                grpcroute|grpcroutes)
-                    echo "🌐 ${docs_base}/network_apis/index#grpcroute-gateway-networking-k8s-io-v1" >&2
-                    ;;
-                referencegrant|referencegrants)
-                    echo "🌐 ${docs_base}/network_apis/index#referencegrant-gateway-networking-k8s-io-v1beta1" >&2
-                    ;;
-                cloudprivateipconfig|cloudprivateipconfigs)
-                    echo "🌐 ${docs_base}/network_apis/index#cloudprivateipconfig-cloud-network-openshift-io-v1" >&2
-                    ;;
-                clusteruserdefinednetwork|clusteruserdefinednetworks)
-                    echo "🌐 ${docs_base}/network_apis/index#clusteruserdefinednetwork-k8s-ovn-org-v1" >&2
-                    ;;
-                userdefinednetwork|userdefinednetworks)
-                    echo "🌐 ${docs_base}/network_apis/index#userdefinednetwork-k8s-ovn-org-v1" >&2
-                    ;;
-                ipamclaim|ipamclaims)
-                    echo "🌐 ${docs_base}/network_apis/index#ipamclaim-k8s-cni-cncf-io-v1alpha1" >&2
-                    ;;
-                ippool|ippools)
-                    echo "🌐 ${docs_base}/network_apis/index#ippool-whereabouts-cni-cncf-io-v1alpha1" >&2
-                    ;;
-                nodeslicepool|nodeslicepools)
-                    echo "🌐 ${docs_base}/network_apis/index#nodeslicepool-whereabouts-cni-cncf-io-v1alpha1" >&2
-                    ;;
-                overlappingrangeipreservation|overlappingrangeipreservations)
-                    echo "🌐 ${docs_base}/network_apis/index#overlappingrangeipreservation-whereabouts-cni-cncf-io-v1alpha1" >&2
-                    ;;
-                podnetworkconnectivitycheck|podnetworkconnectivitychecks)
-                    echo "🌐 ${docs_base}/network_apis/index#podnetworkconnectivitycheck-controlplane-operator-openshift-io-v1alpha1" >&2
-                    ;;
-                adminpolicybasedexternalroute|adminpolicybasedexternalroutes)
-                    echo "🌐 ${docs_base}/network_apis/index#adminpolicybasedexternalroute-k8s-ovn-org-v1" >&2
-                    ;;
+                local converted_type=""
+                if [[ -n "$group" && -n "$version" && -n "$kind" ]]; then
+                    # Convert to console format: group~version~Kind
+                    converted_type="${group}~${version}~${kind}"
+                elif [[ -n "$kind" && -n "$version" ]]; then
+                    # Core resources don't have a group, use "core"
+                    converted_type="core~${version}~${kind}"
+                else
+                    # Fallback to the conversion function
+                    converted_type=$(convert_resource_to_console_format "$base_resource")
+                fi
                 
-                # Storage APIs
-                persistentvolume|persistentvolumes|pv)
-                    echo "🌐 ${docs_base}/storage_apis/index#persistentvolume-v1" >&2
-                    ;;
-                persistentvolumeclaim|persistentvolumeclaims|pvc)
-                    echo "🌐 ${docs_base}/storage_apis/index#persistentvolumeclaim-v1" >&2
-                    ;;
-                storageclass|storageclasses)
-                    echo "🌐 ${docs_base}/storage_apis/index#storageclass-storage-k8s-io-v1" >&2
-                    ;;
-                volumeattachment|volumeattachments)
-                    echo "🌐 ${docs_base}/storage_apis/index#volumeattachment-storage-k8s-io-v1" >&2
-                    ;;
-                volumesnapshot|volumesnapshots)
-                    echo "🌐 ${docs_base}/storage_apis/index#volumesnapshot-snapshot-storage-k8s-io-v1" >&2
-                    ;;
-                volumesnapshotclass|volumesnapshotclasses)
-                    echo "🌐 ${docs_base}/storage_apis/index#volumesnapshotclass-snapshot-storage-k8s-io-v1" >&2
-                    ;;
-                volumesnapshotcontent|volumesnapshotcontents)
-                    echo "🌐 ${docs_base}/storage_apis/index#volumesnapshotcontent-snapshot-storage-k8s-io-v1" >&2
-                    ;;
-                csidriver|csidrivers)
-                    echo "🌐 ${docs_base}/storage_apis/index#csidriver-storage-k8s-io-v1" >&2
-                    ;;
-                csinode|csinodes)
-                    echo "🌐 ${docs_base}/storage_apis/index#csinode-storage-k8s-io-v1" >&2
-                    ;;
-                csistoragecapacity|csistoragecapacities)
-                    echo "🌐 ${docs_base}/storage_apis/index#csistoragecapacity-storage-k8s-io-v1" >&2
-                    ;;
-                storagestate|storagestates)
-                    echo "🌐 ${docs_base}/storage_apis/index#storagestate-migration-k8s-io-v1alpha1" >&2
-                    ;;
-                storageversionmigration|storageversionmigrations)
-                    echo "🌐 ${docs_base}/storage_apis/index#storageversionmigration-migration-k8s-io-v1alpha1" >&2
-                    ;;
+                # Determine if resource is namespaced to choose correct URL path
+                local namespace_path=""
+                if is_resource_namespaced "$base_resource"; then
+                    # Namespaced resource - use current namespace
+                    local current_namespace=$(get_current_namespace)
+                    if [[ -n "$current_namespace" ]]; then
+                        namespace_path="ns/$current_namespace"
+                    else
+                        namespace_path="all-namespaces"
+                    fi
+                else
+                    # Cluster-scoped resource - use all-namespaces
+                    namespace_path="all-namespaces"
+                fi
                 
-                # Config and Metadata APIs
-                configmap|configmaps)
-                    echo "🌐 ${docs_base}/metadata_apis/index#configmap-v1" >&2
-                    ;;
-                namespace|namespaces)
-                    echo "🌐 ${docs_base}/metadata_apis/index#namespace-v1" >&2
-                    ;;
-                event|events)
-                    echo "🌐 ${docs_base}/metadata_apis/index#event-v1" >&2
-                    ;;
-                lease|leases)
-                    echo "🌐 ${docs_base}/metadata_apis/index#lease-coordination-k8s-io-v1" >&2
-                    ;;
-                binding|bindings)
-                    echo "🌐 ${docs_base}/metadata_apis/index#binding-v1" >&2
-                    ;;
-                componentstatus|componentstatuses)
-                    echo "🌐 ${docs_base}/metadata_apis/index#componentstatus-v1" >&2
-                    ;;
-                apirequestcount|apirequestcounts)
-                    echo "🌐 ${docs_base}/metadata_apis/index#apirequestcount-apiserver-openshift-io-v1" >&2
-                    ;;
-                
-                # Security APIs
-                secret|secrets)
-                    echo "🌐 ${docs_base}/security_apis/index#secret-v1" >&2
-                    ;;
-                serviceaccount|serviceaccounts)
-                    echo "🌐 ${docs_base}/security_apis/index#serviceaccount-v1" >&2
-                    ;;
-                securitycontextconstraints|scc)
-                    echo "🌐 ${docs_base}/security_apis/index#securitycontextconstraints-security-openshift-io-v1" >&2
-                    ;;
-                certificatesigningrequest|certificatesigningrequests)
-                    echo "🌐 ${docs_base}/security_apis/index#certificatesigningrequest-certificates-k8s-io-v1" >&2
-                    ;;
-                credentialsrequest|credentialsrequests)
-                    echo "🌐 ${docs_base}/security_apis/index#credentialsrequest-cloudcredential-openshift-io-v1" >&2
-                    ;;
-                podsecuritypolicyreview|podsecuritypolicyreviews)
-                    echo "🌐 ${docs_base}/security_apis/index#podsecuritypolicyreview-security-openshift-io-v1" >&2
-                    ;;
-                podsecuritypolicyselfsubjectreview|podsecuritypolicyselfsubjectreviews)
-                    echo "🌐 ${docs_base}/security_apis/index#podsecuritypolicyselfsubjectreview-security-openshift-io-v1" >&2
-                    ;;
-                podsecuritypolicysubjectreview|podsecuritypolicysubjectreviews)
-                    echo "🌐 ${docs_base}/security_apis/index#podsecuritypolicysubjectreview-security-openshift-io-v1" >&2
-                    ;;
-                rangeallocation|rangeallocations)
-                    echo "🌐 ${docs_base}/security_apis/index#rangeallocation-security-openshift-io-v1" >&2
-                    ;;
-                
-                # Node APIs
-                node|nodes)
-                    echo "🌐 ${docs_base}/node_apis/index#node-v1" >&2
-                    ;;
-                runtimeclass|runtimeclasses)
-                    echo "🌐 ${docs_base}/node_apis/index#runtimeclass-node-k8s-io-v1" >&2
-                    ;;
-                performanceprofile|performanceprofiles)
-                    echo "🌐 ${docs_base}/node_apis/index#performanceprofile-performance-openshift-io-v2" >&2
-                    ;;
-                profile|profiles)
-                    echo "🌐 ${docs_base}/node_apis/index#profile-tuned-openshift-io-v1" >&2
-                    ;;
-                tuned)
-                    echo "🌐 ${docs_base}/node_apis/index#tuned-tuned-openshift-io-v1" >&2
-                    ;;
-                
-                # RBAC APIs
-                role|roles)
-                    echo "🌐 ${docs_base}/rbac_apis/index#role-rbac-authorization-k8s-io-v1" >&2
-                    ;;
-                rolebinding|rolebindings)
-                    echo "🌐 ${docs_base}/rbac_apis/index#rolebinding-rbac-authorization-k8s-io-v1" >&2
-                    ;;
-                clusterrole|clusterroles)
-                    echo "🌐 ${docs_base}/rbac_apis/index#clusterrole-rbac-authorization-k8s-io-v1" >&2
-                    ;;
-                clusterrolebinding|clusterrolebindings)
-                    echo "🌐 ${docs_base}/rbac_apis/index#clusterrolebinding-rbac-authorization-k8s-io-v1" >&2
-                    ;;
-                
-                # Image APIs
-                image|images)
-                    echo "🌐 ${docs_base}/image_apis/index#image-image-openshift-io-v1" >&2
-                    ;;
-                imagestream|imagestreams)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestream-image-openshift-io-v1" >&2
-                    ;;
-                imagestreamimage|imagestreamimages)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestreamimage-image-openshift-io-v1" >&2
-                    ;;
-                imagestreamimport|imagestreamimports)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestreamimport-image-openshift-io-v1" >&2
-                    ;;
-                imagestreamlayers)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestreamlayers-image-openshift-io-v1" >&2
-                    ;;
-                imagestreammapping|imagestreammappings)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestreammapping-image-openshift-io-v1" >&2
-                    ;;
-                imagestreamtag|imagestreamtags)
-                    echo "🌐 ${docs_base}/image_apis/index#imagestreamtag-image-openshift-io-v1" >&2
-                    ;;
-                imagetag|imagetags)
-                    echo "🌐 ${docs_base}/image_apis/index#imagetag-image-openshift-io-v1" >&2
-                    ;;
-                imagesignature|imagesignatures)
-                    echo "🌐 ${docs_base}/image_apis/index#imagesignature-image-openshift-io-v1" >&2
-                    ;;
-                secretlist|secretlists)
-                    echo "🌐 ${docs_base}/image_apis/index#secretlist-image-openshift-io-v1" >&2
-                    ;;
-                
-                # Config APIs
-                apiserver|apiservers)
-                    echo "🌐 ${docs_base}/config_apis/index#apiserver-config-openshift-io-v1" >&2
-                    ;;
-                authentication|authentications)
-                    echo "🌐 ${docs_base}/config_apis/index#authentication-config-openshift-io-v1" >&2
-                    ;;
-                build)
-                    echo "🌐 ${docs_base}/config_apis/index#build-config-openshift-io-v1" >&2
-                    ;;
-                clusteroperator|clusteroperators)
-                    echo "🌐 ${docs_base}/config_apis/index#clusteroperator-config-openshift-io-v1" >&2
-                    ;;
-                clusterversion|clusterversions)
-                    echo "🌐 ${docs_base}/config_apis/index#clusterversion-config-openshift-io-v1" >&2
-                    ;;
-                console|consoles)
-                    echo "🌐 ${docs_base}/config_apis/index#console-config-openshift-io-v1" >&2
-                    ;;
-                dns)
-                    echo "🌐 ${docs_base}/config_apis/index#dns-config-openshift-io-v1" >&2
-                    ;;
-                featuregate|featuregates)
-                    echo "🌐 ${docs_base}/config_apis/index#featuregate-config-openshift-io-v1" >&2
-                    ;;
-                image)
-                    echo "🌐 ${docs_base}/config_apis/index#image-config-openshift-io-v1" >&2
-                    ;;
-                imagecontentpolicy|imagecontentpolicies)
-                    echo "🌐 ${docs_base}/config_apis/index#imagecontentpolicy-config-openshift-io-v1" >&2
-                    ;;
-                imagedigestmirrorset|imagedigestmirrorsets)
-                    echo "🌐 ${docs_base}/config_apis/index#imagedigestmirrorset-config-openshift-io-v1" >&2
-                    ;;
-                imagetagmirrorset|imagetagmirrorsets)
-                    echo "🌐 ${docs_base}/config_apis/index#imagetagmirrorset-config-openshift-io-v1" >&2
-                    ;;
-                infrastructure|infrastructures)
-                    echo "🌐 ${docs_base}/config_apis/index#infrastructure-config-openshift-io-v1" >&2
-                    ;;
-                network|networks)
-                    echo "🌐 ${docs_base}/config_apis/index#network-config-openshift-io-v1" >&2
-                    ;;
-                oauth|oauths)
-                    echo "🌐 ${docs_base}/config_apis/index#oauth-config-openshift-io-v1" >&2
-                    ;;
-                operatorhub|operatorhubs)
-                    echo "🌐 ${docs_base}/config_apis/index#operatorhub-config-openshift-io-v1" >&2
-                    ;;
-                project|projects)
-                    echo "🌐 ${docs_base}/config_apis/index#project-config-openshift-io-v1" >&2
-                    ;;
-                proxy|proxies)
-                    echo "🌐 ${docs_base}/config_apis/index#proxy-config-openshift-io-v1" >&2
-                    ;;
-                scheduler|schedulers)
-                    echo "🌐 ${docs_base}/config_apis/index#scheduler-config-openshift-io-v1" >&2
-                    ;;
-                helmchartrepository|helmchartrepositories)
-                    echo "🌐 ${docs_base}/config_apis/index#helmchartrepository-helm-openshift-io-v1beta1" >&2
-                    ;;
-                projecthelmchartrepository|projecthelmchartrepositories)
-                    echo "🌐 ${docs_base}/config_apis/index#projecthelmchartrepository-helm-openshift-io-v1beta1" >&2
-                    ;;
-                
-                # Monitoring APIs
-                alertingrule|alertingrules)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#alertingrule-monitoring-openshift-io-v1" >&2
-                    ;;
-                alertmanager|alertmanagers)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#alertmanager-monitoring-coreos-com-v1" >&2
-                    ;;
-                alertmanagerconfig|alertmanagerconfigs)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#alertmanagerconfig-monitoring-coreos-com-v1beta1" >&2
-                    ;;
-                alertrelabelconfig|alertrelabelconfigs)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#alertrelabelconfig-monitoring-openshift-io-v1" >&2
-                    ;;
-                nodemetrics)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#nodemetrics-metrics-k8s-io-v1beta1" >&2
-                    ;;
-                podmetrics)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#podmetrics-metrics-k8s-io-v1beta1" >&2
-                    ;;
-                podmonitor|podmonitors)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#podmonitor-monitoring-coreos-com-v1" >&2
-                    ;;
-                probe|probes)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#probe-monitoring-coreos-com-v1" >&2
-                    ;;
-                prometheus)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#prometheus-monitoring-coreos-com-v1" >&2
-                    ;;
-                prometheusrule|prometheusrules)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#prometheusrule-monitoring-coreos-com-v1" >&2
-                    ;;
-                servicemonitor|servicemonitors)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#servicemonitor-monitoring-coreos-com-v1" >&2
-                    ;;
-                thanosruler|thanosrulers)
-                    echo "🌐 ${docs_base}/monitoring_apis/index#thanosruler-monitoring-coreos-com-v1" >&2
-                    ;;
-                
-                # Authorization APIs
-                localresourceaccessreview|localresourceaccessreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#localresourceaccessreview-authorization-openshift-io-v1" >&2
-                    ;;
-                localsubjectaccessreview|localsubjectaccessreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#localsubjectaccessreview-authorization-k8s-io-v1" >&2
-                    ;;
-                resourceaccessreview|resourceaccessreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#resourceaccessreview-authorization-openshift-io-v1" >&2
-                    ;;
-                selfsubjectaccessreview|selfsubjectaccessreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#selfsubjectaccessreview-authorization-k8s-io-v1" >&2
-                    ;;
-                selfsubjectreview|selfsubjectreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#selfsubjectreview-authentication-k8s-io-v1" >&2
-                    ;;
-                selfsubjectrulesreview|selfsubjectrulesreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#selfsubjectrulesreview-authorization-k8s-io-v1" >&2
-                    ;;
-                subjectaccessreview|subjectaccessreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#subjectaccessreview-authorization-k8s-io-v1" >&2
-                    ;;
-                subjectrulesreview|subjectrulesreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#subjectrulesreview-authorization-openshift-io-v1" >&2
-                    ;;
-                tokenrequest|tokenrequests)
-                    echo "🌐 ${docs_base}/authorization_apis/index#tokenrequest-authentication-k8s-io-v1" >&2
-                    ;;
-                tokenreview|tokenreviews)
-                    echo "🌐 ${docs_base}/authorization_apis/index#tokenreview-authentication-k8s-io-v1" >&2
-                    ;;
-                
-                # Role APIs
-                rolebindingrestriction|rolebindingrestrictions)
-                    echo "🌐 ${docs_base}/role_apis/index#rolebindingrestriction-authorization-openshift-io-v1" >&2
-                    ;;
-                
-                # User and Group APIs
-                group|groups)
-                    echo "🌐 ${docs_base}/user_and_group_apis/index#group-user-openshift-io-v1" >&2
-                    ;;
-                identity|identities)
-                    echo "🌐 ${docs_base}/user_and_group_apis/index#identity-user-openshift-io-v1" >&2
-                    ;;
-                user|users)
-                    echo "🌐 ${docs_base}/user_and_group_apis/index#user-user-openshift-io-v1" >&2
-                    ;;
-                useridentitymapping|useridentitymappings)
-                    echo "🌐 ${docs_base}/user_and_group_apis/index#useridentitymapping-user-openshift-io-v1" >&2
-                    ;;
-                
-                # OAuth APIs
-                oauthaccesstoken|oauthaccesstokens)
-                    echo "🌐 ${docs_base}/oauth_apis/index#oauthaccesstoken-oauth-openshift-io-v1" >&2
-                    ;;
-                oauthauthorizetoken|oauthauthorizetokens)
-                    echo "🌐 ${docs_base}/oauth_apis/index#oauthauthorizetoken-oauth-openshift-io-v1" >&2
-                    ;;
-                oauthclient|oauthclients)
-                    echo "🌐 ${docs_base}/oauth_apis/index#oauthclient-oauth-openshift-io-v1" >&2
-                    ;;
-                oauthclientauthorization|oauthclientauthorizations)
-                    echo "🌐 ${docs_base}/oauth_apis/index#oauthclientauthorization-oauth-openshift-io-v1" >&2
-                    ;;
-                useroauthaccesstoken|useroauthaccesstokens)
-                    echo "🌐 ${docs_base}/oauth_apis/index#useroauthaccesstoken-oauth-openshift-io-v1" >&2
-                    ;;
-                
-                # Template APIs
-                template|templates)
-                    echo "🌐 ${docs_base}/template_apis/index#template-template-openshift-io-v1" >&2
-                    ;;
-                templateinstance|templateinstances)
-                    echo "🌐 ${docs_base}/template_apis/index#templateinstance-template-openshift-io-v1" >&2
-                    ;;
-                brokertemplateinstance|brokertemplateinstances)
-                    echo "🌐 ${docs_base}/template_apis/index#brokertemplateinstance-template-openshift-io-v1" >&2
-                    ;;
-                
-                # Project APIs
-                projectrequest|projectrequests)
-                    echo "🌐 ${docs_base}/project_apis/index#projectrequest-project-openshift-io-v1" >&2
-                    ;;
-                
-                # Console APIs
-                consoleclidownload|consoleclidownloads)
-                    echo "🌐 ${docs_base}/console_apis/index#consoleclidownload-console-openshift-io-v1" >&2
-                    ;;
-                consoleexternalloglink|consoleexternalloglinks)
-                    echo "🌐 ${docs_base}/console_apis/index#consoleexternalloglink-console-openshift-io-v1" >&2
-                    ;;
-                consolelink|consolelinks)
-                    echo "🌐 ${docs_base}/console_apis/index#consolelink-console-openshift-io-v1" >&2
-                    ;;
-                consolenotification|consolenotifications)
-                    echo "🌐 ${docs_base}/console_apis/index#consolenotification-console-openshift-io-v1" >&2
-                    ;;
-                consoleplugin|consoleplugins)
-                    echo "🌐 ${docs_base}/console_apis/index#consoleplugin-console-openshift-io-v1" >&2
-                    ;;
-                consolequickstart|consolequickstarts)
-                    echo "🌐 ${docs_base}/console_apis/index#consolequickstart-console-openshift-io-v1" >&2
-                    ;;
-                consolesample|consolesamples)
-                    echo "🌐 ${docs_base}/console_apis/index#consolesample-console-openshift-io-v1" >&2
-                    ;;
-                consoleyamlsample|consoleyamlsamples)
-                    echo "🌐 ${docs_base}/console_apis/index#consoleyamlsample-console-openshift-io-v1" >&2
-                    ;;
-                
-                # Schedule and Quota APIs
-                appliedclusterresourcequota|appliedclusterresourcequotas)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#appliedclusterresourcequota-quota-openshift-io-v1" >&2
-                    ;;
-                clusterresourcequota|clusterresourcequotas)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#clusterresourcequota-quota-openshift-io-v1" >&2
-                    ;;
-                flowschema|flowschemas)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#flowschema-flowcontrol-apiserver-k8s-io-v1" >&2
-                    ;;
-                limitrange|limitranges)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#limitrange-v1" >&2
-                    ;;
-                priorityclass|priorityclasses)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#priorityclass-scheduling-k8s-io-v1" >&2
-                    ;;
-                prioritylevelconfiguration|prioritylevelconfigurations)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#prioritylevelconfiguration-flowcontrol-apiserver-k8s-io-v1" >&2
-                    ;;
-                resourcequota|resourcequotas)
-                    echo "🌐 ${docs_base}/schedule_and_quota_apis/index#resourcequota-v1" >&2
-                    ;;
-                
-                # Policy APIs
-                eviction|evictions)
-                    echo "🌐 ${docs_base}/policy_apis/index#eviction-policy-v1" >&2
-                    ;;
-                poddisruptionbudget|poddisruptionbudgets)
-                    echo "🌐 ${docs_base}/policy_apis/index#poddisruptionbudget-policy-v1" >&2
-                    ;;
-                
-                # Autoscale APIs
-                clusterautoscaler|clusterautoscalers)
-                    echo "🌐 ${docs_base}/autoscale_apis/index#clusterautoscaler-autoscaling-openshift-io-v1" >&2
-                    ;;
-                horizontalpodautoscaler|horizontalpodautoscalers)
-                    echo "🌐 ${docs_base}/autoscale_apis/index#horizontalpodautoscaler-autoscaling-v2" >&2
-                    ;;
-                machineautoscaler|machineautoscalers)
-                    echo "🌐 ${docs_base}/autoscale_apis/index#machineautoscaler-autoscaling-openshift-io-v1beta1" >&2
-                    ;;
-                scale|scales)
-                    echo "🌐 ${docs_base}/autoscale_apis/index#scale-autoscaling-v1" >&2
-                    ;;
-                
-                # Extension APIs
-                apiservice|apiservices)
-                    echo "🌐 ${docs_base}/extension_apis/index#apiservice-apiregistration-k8s-io-v1" >&2
-                    ;;
-                customresourcedefinition|customresourcedefinitions)
-                    echo "🌐 ${docs_base}/extension_apis/index#customresourcedefinition-apiextensions-k8s-io-v1" >&2
-                    ;;
-                mutatingwebhookconfiguration|mutatingwebhookconfigurations)
-                    echo "🌐 ${docs_base}/extension_apis/index#mutatingwebhookconfiguration-admissionregistration-k8s-io-v1" >&2
-                    ;;
-                validatingadmissionpolicy|validatingadmissionpolicies)
-                    echo "🌐 ${docs_base}/extension_apis/index#validatingadmissionpolicy-admissionregistration-k8s-io-v1" >&2
-                    ;;
-                validatingadmissionpolicybinding|validatingadmissionpolicybindings)
-                    echo "🌐 ${docs_base}/extension_apis/index#validatingadmissionpolicybinding-admissionregistration-k8s-io-v1" >&2
-                    ;;
-                validatingwebhookconfiguration|validatingwebhookconfigurations)
-                    echo "🌐 ${docs_base}/extension_apis/index#validatingwebhookconfiguration-admissionregistration-k8s-io-v1" >&2
-                    ;;
-                
-                # Operator APIs (comprehensive list)
-                authentication)
-                    echo "🌐 ${docs_base}/operator_apis/index#authentication-operator-openshift-io-v1" >&2
-                    ;;
-                cloudcredential|cloudcredentials)
-                    echo "🌐 ${docs_base}/operator_apis/index#cloudcredential-operator-openshift-io-v1" >&2
-                    ;;
-                clustercsidriver|clustercsidrivers)
-                    echo "🌐 ${docs_base}/operator_apis/index#clustercsidriver-operator-openshift-io-v1" >&2
-                    ;;
-                config)
-                    echo "🌐 ${docs_base}/operator_apis/index#config-operator-openshift-io-v1" >&2
-                    ;;
-                csisnapshotcontroller|csisnapshotcontrollers)
-                    echo "🌐 ${docs_base}/operator_apis/index#csisnapshotcontroller-operator-openshift-io-v1" >&2
-                    ;;
-                dnsrecord|dnsrecords)
-                    echo "🌐 ${docs_base}/operator_apis/index#dnsrecord-ingress-operator-openshift-io-v1" >&2
-                    ;;
-                etcd)
-                    echo "🌐 ${docs_base}/operator_apis/index#etcd-operator-openshift-io-v1" >&2
-                    ;;
-                imagecontentsourcepolicy|imagecontentsourcepolicies)
-                    echo "🌐 ${docs_base}/operator_apis/index#imagecontentsourcepolicy-operator-openshift-io-v1alpha1" >&2
-                    ;;
-                imagepruner|imagepruners)
-                    echo "🌐 ${docs_base}/operator_apis/index#imagepruner-imageregistry-operator-openshift-io-v1" >&2
-                    ;;
-                ingresscontroller|ingresscontrollers)
-                    echo "🌐 ${docs_base}/operator_apis/index#ingresscontroller-operator-openshift-io-v1" >&2
-                    ;;
-                insightsoperator|insightsoperators)
-                    echo "🌐 ${docs_base}/operator_apis/index#insightsoperator-operator-openshift-io-v1" >&2
-                    ;;
-                kubeapiserver|kubeapiservers)
-                    echo "🌐 ${docs_base}/operator_apis/index#kubeapiserver-operator-openshift-io-v1" >&2
-                    ;;
-                kubecontrollermanager|kubecontrollermanagers)
-                    echo "🌐 ${docs_base}/operator_apis/index#kubecontrollermanager-operator-openshift-io-v1" >&2
-                    ;;
-                kubescheduler|kubeschedulers)
-                    echo "🌐 ${docs_base}/operator_apis/index#kubescheduler-operator-openshift-io-v1" >&2
-                    ;;
-                kubestorageversionmigrator|kubestorageversionmigrators)
-                    echo "🌐 ${docs_base}/operator_apis/index#kubestorageversionmigrator-operator-openshift-io-v1" >&2
-                    ;;
-                machineconfiguration|machineconfigurations)
-                    echo "🌐 ${docs_base}/operator_apis/index#machineconfiguration-operator-openshift-io-v1" >&2
-                    ;;
-                openshiftapiserver|openshiftapiservers)
-                    echo "🌐 ${docs_base}/operator_apis/index#openshiftapiserver-operator-openshift-io-v1" >&2
-                    ;;
-                openshiftcontrollermanager|openshiftcontrollermanagers)
-                    echo "🌐 ${docs_base}/operator_apis/index#openshiftcontrollermanager-operator-openshift-io-v1" >&2
-                    ;;
-                operatorpki|operatorpkis)
-                    echo "🌐 ${docs_base}/operator_apis/index#operatorpki-network-operator-openshift-io-v1" >&2
-                    ;;
-                serviceca|servicecas)
-                    echo "🌐 ${docs_base}/operator_apis/index#serviceca-operator-openshift-io-v1" >&2
-                    ;;
-                storage)
-                    echo "🌐 ${docs_base}/operator_apis/index#storage-operator-openshift-io-v1" >&2
-                    ;;
-                
-                # Machine APIs
-                containerruntimeconfig|containerruntimeconfigs)
-                    echo "🌐 ${docs_base}/machine_apis/index#containerruntimeconfig-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                controllerconfig|controllerconfigs)
-                    echo "🌐 ${docs_base}/machine_apis/index#controllerconfig-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                controlplanemachineset|controlplanemachinesets)
-                    echo "🌐 ${docs_base}/machine_apis/index#controlplanemachineset-machine-openshift-io-v1" >&2
-                    ;;
-                kubeletconfig|kubeletconfigs)
-                    echo "🌐 ${docs_base}/machine_apis/index#kubeletconfig-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                machine|machines)
-                    echo "🌐 ${docs_base}/machine_apis/index#machine-machine-openshift-io-v1beta1" >&2
-                    ;;
-                machineconfig|machineconfigs)
-                    echo "🌐 ${docs_base}/machine_apis/index#machineconfig-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                machineconfigpool|machineconfigpools)
-                    echo "🌐 ${docs_base}/machine_apis/index#machineconfigpool-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                machinehealthcheck|machinehealthchecks)
-                    echo "🌐 ${docs_base}/machine_apis/index#machinehealthcheck-machine-openshift-io-v1beta1" >&2
-                    ;;
-                machineosbuild|machineosbuilds)
-                    echo "🌐 ${docs_base}/machine_apis/index#machineosbuild-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                machineosconfig|machineosconfigs)
-                    echo "🌐 ${docs_base}/machine_apis/index#machineosconfig-machineconfiguration-openshift-io-v1" >&2
-                    ;;
-                machineset|machinesets)
-                    echo "🌐 ${docs_base}/machine_apis/index#machineset-machine-openshift-io-v1beta1" >&2
-                    ;;
-                
-                # OperatorHub APIs
-                catalogsource|catalogsources)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#catalogsource-operators-coreos-com-v1alpha1" >&2
-                    ;;
-                clustercatalog|clustercatalogs)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#clustercatalog-olm-operatorframework-io-v1" >&2
-                    ;;
-                clusterextension|clusterextensions)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#clusterextension-olm-operatorframework-io-v1" >&2
-                    ;;
-                clusterserviceversion|clusterserviceversions)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#clusterserviceversion-operators-coreos-com-v1alpha1" >&2
-                    ;;
-                installplan|installplans)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#installplan-operators-coreos-com-v1alpha1" >&2
-                    ;;
-                olmconfig|olmconfigs)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#olmconfig-operators-coreos-com-v1" >&2
-                    ;;
-                operator|operators)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#operator-operators-coreos-com-v1" >&2
-                    ;;
-                operatorcondition|operatorconditions)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#operatorcondition-operators-coreos-com-v2" >&2
-                    ;;
-                operatorgroup|operatorgroups)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#operatorgroup-operators-coreos-com-v1" >&2
-                    ;;
-                packagemanifest|packagemanifests)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#packagemanifest-packages-operators-coreos-com-v1" >&2
-                    ;;
-                subscription|subscriptions)
-                    echo "🌐 ${docs_base}/operatorhub_apis/index#subscription-operators-coreos-com-v1alpha1" >&2
-                    ;;
-                
-                # Provisioning APIs
-                baremetalhost|baremetalhosts)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#baremetalhost-metal3-io-v1alpha1" >&2
-                    ;;
-                bmceventsubscription|bmceventsubscriptions)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#bmceventsubscription-metal3-io-v1alpha1" >&2
-                    ;;
-                dataimage|dataimages)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#dataimage-metal3-io-v1alpha1" >&2
-                    ;;
-                firmwareschema|firmwareschemas)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#firmwareschema-metal3-io-v1alpha1" >&2
-                    ;;
-                hardwaredata)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#hardwaredata-metal3-io-v1alpha1" >&2
-                    ;;
-                hostfirmwarecomponents)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#hostfirmwarecomponents-metal3-io-v1alpha1" >&2
-                    ;;
-                hostfirmwaresettings)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#hostfirmwaresettings-metal3-io-v1alpha1" >&2
-                    ;;
-                hostupdatepolicy|hostupdatepolicies)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#hostupdatepolicy-metal3-io-v1alpha1" >&2
-                    ;;
-                metal3remediation|metal3remediations)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#metal3remediation-infrastructure-cluster-x-k8s-io-v1beta1" >&2
-                    ;;
-                metal3remediationtemplate|metal3remediationtemplates)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#metal3remediationtemplate-infrastructure-cluster-x-k8s-io-v1beta1" >&2
-                    ;;
-                preprovisioningimage|preprovisioningimages)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#preprovisioningimage-metal3-io-v1alpha1" >&2
-                    ;;
-                provisioning)
-                    echo "🌐 ${docs_base}/provisioning_apis/index#provisioning-metal3-io-v1alpha1" >&2
-                    ;;
-                
-                # Cluster APIs
-                ipaddress|ipaddresses)
-                    echo "🌐 ${docs_base}/cluster_apis/index#ipaddress-ipam-cluster-x-k8s-io-v1beta1" >&2
-                    ;;
-                ipaddressclaim|ipaddressclaims)
-                    echo "🌐 ${docs_base}/cluster_apis/index#ipaddressclaim-ipam-cluster-x-k8s-io-v1beta1" >&2
-                    ;;
-                
-                *)
-                    # Fallback to general API documentation
-                    echo "🌐 ${docs_base}/workloads_apis/index" >&2
-                    ;;
-            esac
+                echo "🌐 ${console_base}/api-resource/$namespace_path/$converted_type/schema" >&2
+            fi
         fi
         return
     fi
@@ -1677,22 +1096,90 @@ generate_console_url() {
                         console_path="/k8s/ns/$namespace/events"
                         ;;
                     *)
-                        # For unknown namespaced resources, use all-namespaces fallback with converted type
-                        local converted_type=$(convert_resource_to_console_format "$resource_type")
-                        if [[ -n "$resource_name" ]]; then
-                            console_path="/api-resource/all-namespaces/$converted_type/instances/$resource_name"
+                        # For unknown resources, determine if they are namespaced and use appropriate URL path
+                        # Try to get API info from oc explain first, then fall back to convert function
+                        local explain_output=$(oc explain "$resource_type" 2>/dev/null | head -10)
+                        local group=$(echo "$explain_output" | grep "^GROUP:" | awk '{print $2}')
+                        local kind=$(echo "$explain_output" | grep "^KIND:" | awk '{print $2}')
+                        local version=$(echo "$explain_output" | grep "^VERSION:" | awk '{print $2}')
+                        
+                        local converted_type=""
+                        if [[ -n "$group" && -n "$version" && -n "$kind" ]]; then
+                            # Convert to console format: group~version~Kind
+                            converted_type="${group}~${version}~${kind}"
+                        elif [[ -n "$kind" && -n "$version" ]]; then
+                            # Core resources don't have a group, use "core"
+                            converted_type="core~${version}~${kind}"
                         else
-                            console_path="/api-resource/all-namespaces/$converted_type/instances"
+                            # Fallback to the conversion function
+                            converted_type=$(convert_resource_to_console_format "$resource_type")
+                        fi
+                        
+                        # Determine if resource is namespaced to choose correct URL path
+                        local namespace_path=""
+                        if is_resource_namespaced "$resource_type"; then
+                            # Namespaced resource - use current namespace
+                            if [[ -n "$namespace" ]]; then
+                                namespace_path="ns/$namespace"
+                            else
+                                namespace_path="all-namespaces"
+                            fi
+                        else
+                            # Cluster-scoped resource - use all-namespaces
+                            namespace_path="all-namespaces"
+                        fi
+                        
+                        if [[ -n "$resource_name" ]]; then
+                            # For specific resource instances, use the standard k8s path format
+                            if [[ -n "$namespace" ]]; then
+                                console_path="/k8s/ns/$namespace/$converted_type/$resource_name"
+                            else
+                                console_path="/k8s/cluster/$converted_type/$resource_name"
+                            fi
+                        else
+                            console_path="/api-resource/$namespace_path/$converted_type/instances"
                         fi
                         ;;
                 esac
             else
-                # For unknown resources without namespace, use all-namespaces fallback with converted type
-                local converted_type=$(convert_resource_to_console_format "$resource_type")
-                if [[ -n "$resource_name" ]]; then
-                    console_path="/api-resource/all-namespaces/$converted_type/instances/$resource_name"
+                # For unknown resources without namespace context, determine if they are namespaced
+                # Try to get API info from oc explain first, then fall back to convert function
+                local explain_output=$(oc explain "$resource_type" 2>/dev/null | head -10)
+                local group=$(echo "$explain_output" | grep "^GROUP:" | awk '{print $2}')
+                local kind=$(echo "$explain_output" | grep "^KIND:" | awk '{print $2}')
+                local version=$(echo "$explain_output" | grep "^VERSION:" | awk '{print $2}')
+                
+                local converted_type=""
+                if [[ -n "$group" && -n "$version" && -n "$kind" ]]; then
+                    # Convert to console format: group~version~Kind
+                    converted_type="${group}~${version}~${kind}"
+                elif [[ -n "$kind" && -n "$version" ]]; then
+                    # Core resources don't have a group, use "core"
+                    converted_type="core~${version}~${kind}"
                 else
-                    console_path="/api-resource/all-namespaces/$converted_type/instances"
+                    # Fallback to the conversion function
+                    converted_type=$(convert_resource_to_console_format "$resource_type")
+                fi
+                
+                # Determine if resource is namespaced to choose correct URL path
+                local namespace_path=""
+                if is_resource_namespaced "$resource_type"; then
+                    # Namespaced resource - but no namespace context, so use all-namespaces
+                    namespace_path="all-namespaces"
+                else
+                    # Cluster-scoped resource - use all-namespaces
+                    namespace_path="all-namespaces"
+                fi
+                
+                if [[ -n "$resource_name" ]]; then
+                    # For specific resource instances, use the standard k8s path format
+                    if is_resource_namespaced "$resource_type"; then
+                        console_path="/k8s/all-namespaces/$converted_type/$resource_name"
+                    else
+                        console_path="/k8s/cluster/$converted_type/$resource_name"
+                    fi
+                else
+                    console_path="/api-resource/$namespace_path/$converted_type/instances"
                 fi
             fi
             ;;
